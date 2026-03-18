@@ -1,6 +1,6 @@
 'use client';
 import React from 'react';
-import { apiAsk } from '@/lib/api';
+import { apiAsk } from '../lib/api';
 
 type Message = { role: 'user' | 'assistant', content: string, citations?: {title:string, section?:string}[], chunks?: {title:string, section?:string, text:string}[] };
 
@@ -37,20 +37,19 @@ export default function Chat() {
             {m.citations && m.citations.length>0 && (
               <div style={{marginTop:6}}>
                 {m.citations.map((c, idx) => (
-                  <span key={idx} className="badge" title={c.section || ''}>{c.title}</span>
+                  <details key={idx} style={{display:'inline-block', marginRight:6, marginBottom:4, verticalAlign:'top'}}>
+                    <summary className="badge" style={{cursor:'pointer', listStyle:'none'}}>
+                      {c.title}{c.section ? ` — ${c.section}` : ''}
+                    </summary>
+                    {m.chunks?.[idx] && (
+                      <div style={{background:'#f6f8fa', padding:8, borderRadius:8, marginTop:4, fontSize:12, maxWidth:480, whiteSpace:'pre-wrap', border:'1px solid #e5e7eb'}}>
+                        <div style={{fontWeight:600, marginBottom:4}}>{m.chunks[idx].title}{m.chunks[idx].section ? ` — ${m.chunks[idx].section}` : ''}</div>
+                        {m.chunks[idx].text}
+                      </div>
+                    )}
+                  </details>
                 ))}
               </div>
-            )}
-            {m.chunks && m.chunks.length>0 && (
-              <details style={{marginTop:6}}>
-                <summary>View supporting chunks</summary>
-                {m.chunks.map((c, idx) => (
-                  <div key={idx} className="card">
-                    <div style={{fontWeight:600}}>{c.title}{c.section ? ' — ' + c.section : ''}</div>
-                    <div style={{whiteSpace:'pre-wrap'}}>{c.text}</div>
-                  </div>
-                ))}
-              </details>
             )}
           </div>
         ))}

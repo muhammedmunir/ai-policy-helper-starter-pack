@@ -1,4 +1,4 @@
-import time, os, math, json, hashlib, re
+import time, os, math, json, hashlib, re, uuid
 from typing import List, Dict, Tuple
 import numpy as np
 from .settings import settings
@@ -65,10 +65,18 @@ class InMemoryStore:
 
 class QdrantStore:
     def __init__(self, collection: str, dim: int = 384):
-        self.client = QdrantClient(url="http://qdrant:6333", timeout=10.0)
-        self.collection = collection
-        self.dim = dim
-        self._ensure_collection()
+        last_err = None
+        for _ in range(15):
+            try:
+                self.client = QdrantClient(url="http://qdrant:6333", timeout=10.0)
+                self.collection = collection
+                self.dim = dim
+                self._ensure_collection()
+                return
+            except Exception as e:
+                last_err = e
+                time.sleep(2)
+        raise last_err or RuntimeError("Cannot connect to Qdrant")
 
     def _ensure_collection(self):
         try:
@@ -225,12 +233,16 @@ class RAGEngine:
         vectors = []
         metas = []
         doc_titles_before = set(self._doc_titles)
+        existing_hashes = getattr(self.store, '_hashes', set())
 
         for ch in chunks:
             text = ch["text"]
             h = doc_hash(text)
+            if h in existing_hashes:
+                continue  # already indexed
+            uid = str(uuid.UUID(h[:32]))  # UUID from first 128 bits of SHA256
             meta = {
-                "id": h,
+                "id": uid,
                 "hash": h,
                 "title": ch["title"],
                 "section": ch.get("section"),
@@ -242,7 +254,8 @@ class RAGEngine:
             self._doc_titles.add(ch["title"])
             self._chunk_count += 1
 
-        self.store.upsert(vectors, metas)
+        if vectors:
+            self.store.upsert(vectors, metas)
         return (len(self._doc_titles) - len(doc_titles_before), len(metas))
 
     def retrieve(self, query: str, k: int = 4) -> List[Dict]:
