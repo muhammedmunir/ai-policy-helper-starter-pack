@@ -1,20 +1,23 @@
 # Issues & Fixes — ai-policy-helper-starter-pack
 
+Focused on what the README acceptance checks and rubric actually require.
+
 ---
 
-## 1. LocalEmbedder is not semantic at all
+## 1. Hash-based embedder breaks all acceptance checks (most critical)
 
 **File:** `backend/app/rag.py` line 28–36
 
 **Problem:**
-- The embedder uses SHA1 hash of the text to seed a random vector generator
-- "what is the refund policy?" and "how do I return an item?" will get completely different vectors even though they mean the same thing
-- The RAG search is essentially random — it will never find the right chunks reliably
+- `LocalEmbedder` seeds a random vector from a SHA1 hash — it is not semantic
+- "Can a customer return a damaged blender after 20 days?" and "What's the shipping SLA?" will get random vectors with zero relation to what the words mean
+- Acceptance check #3 requires `Returns_and_Refunds.md` AND `Warranty_Policy.md` to both be cited — this will never happen reliably
+- Acceptance check #4 requires `Delivery_and_Shipping.md` — same problem
+- The policy-specific tests in `test_api.py` lines 173–202 will all fail (`test_ask_warranty_returns_relevant_source`, `test_ask_returns_policy_returns_relevant_source`, `test_ask_delivery_returns_relevant_source`)
 
 **Fix:**
 ```python
-# Replace LocalEmbedder with a real model
-# pip install sentence-transformers
+# Replace LocalEmbedder in rag.py
 from sentence_transformers import SentenceTransformer
 
 class LocalEmbedder:
@@ -32,235 +35,215 @@ Add to `requirements.txt`:
 sentence-transformers>=2.7.0
 ```
 
----
-
-## 2. CORS misconfigured — browser will reject requests
-
-**File:** `backend/app/main.py` line 31–37
-
-**Problem:**
-- `allow_origins=["*"]` and `allow_credentials=True` are set at the same time
-- Browsers block this combination by spec — wildcard origin + credentials is not allowed
-- Frontend calls to `/api/ask` will fail with a CORS error in the browser console
-
-**Fix:**
+Update `settings.py` default:
 ```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # exact frontend URL only
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-For multiple origins:
-```python
-allow_origins=["http://localhost:3000", "https://yourdomain.com"],
+embedding_model: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 ```
 
 ---
 
-## 3. Qdrant URL is hardcoded in source code
+## 2. Real LLM is required but stub is the default
 
-**File:** `backend/app/rag.py` line 71
+**File:** `.env.example` line 3, `backend/app/rag.py` line 225
 
 **Problem:**
-- `QdrantClient(url="http://qdrant:6333")` is written directly in the code
-- Changing the host or port requires editing source, not `.env`
-- The `Settings` class exists but is not used for the Qdrant URL
+- README line 142 explicitly says: *"You are required to demo with a real LLM, not stub."*
+- Default in `.env.example` is `LLM_PROVIDER=stub`
+- With stub, acceptance check answers look like: `Answer (stub): Based on the following sources:` — this will fail the demo
 
 **Fix:**
 
-Add to `backend/app/settings.py`:
-```python
-qdrant_url: str = os.getenv("QDRANT_URL", "http://qdrant:6333")
+In `.env`, change:
+```
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=<your-key-here>
+LLM_MODEL=openai/gpt-4o-mini
 ```
 
-Update `rag.py`:
-```python
-self.client = QdrantClient(url=settings.qdrant_url, timeout=10.0)
-```
-
-Add to `.env.example`:
-```
-QDRANT_URL=http://qdrant:6333
-```
-
-Add to `docker-compose.yml` under backend environment:
+Also update `docker-compose.yml` to pass `LLM_MODEL` (currently missing):
 ```yaml
-- QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
+- LLM_MODEL=${LLM_MODEL:-openai/gpt-4o-mini}
 ```
 
 ---
 
-## 4. `recreate_collection` is deprecated and removed
+## 3. PII in citation chunks is not masked
 
-**File:** `backend/app/rag.py` line 85–88
+**File:** `backend/app/rag.py` line 272, `frontend/components/Chat.tsx` line 47–51
 
 **Problem:**
-- `self.client.recreate_collection(...)` was removed in newer versions of qdrant-client
-- Will crash with `AttributeError: 'QdrantClient' object has no attribute 'recreate_collection'`
+- `mask_pii()` is only called on the LLM-generated answer (line 272)
+- The raw chunk text sent in `chunks[]` is NOT masked
+- Acceptance check #5 says: "Expand a citation chip and see the underlying chunk text"
+- If any document chunk contains an IC number, email, or phone, it will be visible to the user when they expand the citation popup — violates the PDPA requirement in this project
 
 **Fix:**
+
+In `main.py`, mask chunk text before returning:
 ```python
-def _ensure_collection(self):
-    existing = [c.name for c in self.client.get_collections().collections]
-    if self.collection not in existing:
-        self.client.create_collection(
-            collection_name=self.collection,
-            vectors_config=qm.VectorParams(size=self.dim, distance=qm.Distance.COSINE)
-        )
+chunks = [
+    Chunk(
+        title=c.get("title"),
+        section=c.get("section"),
+        text=mask_pii(c.get("text", ""))
+    )
+    for c in ctx
+]
+```
+
+Import `mask_pii` in `main.py`:
+```python
+from .rag import RAGEngine, build_chunks_from_docs, mask_pii
 ```
 
 ---
 
-## 5. Document title shows raw filename instead of clean name
+## 4. `docker-compose.yml` does not pass `LLM_MODEL` to backend
 
-**File:** `backend/app/ingest.py` line 50
+**File:** `docker-compose.yml` line 13–20
 
 **Problem:**
-- `"title": fname` — citations will show `Returns_and_Refunds.md` to the user
-- Should show `Returns and Refunds` instead
+- `LLM_MODEL` is in `settings.py` and `.env.example` but is not listed in the `environment:` block of docker-compose
+- Setting it in `.env` will have no effect when running via Docker Compose
+- Same issue for `DATA_DIR` — it has a default of `/app/data` which works, but it is not exposed for override either
 
 **Fix:**
-```python
-clean_title = os.path.splitext(fname)[0].replace("_", " ").replace("-", " ")
-docs.append({
-    "title": clean_title,
-    "section": section,
-    "text": body
-})
+```yaml
+environment:
+  - EMBEDDING_MODEL=${EMBEDDING_MODEL:-local-384}
+  - LLM_PROVIDER=${LLM_PROVIDER:-stub}
+  - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+  - LLM_MODEL=${LLM_MODEL:-openai/gpt-4o-mini}
+  - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+  - VECTOR_STORE=${VECTOR_STORE:-qdrant}
+  - COLLECTION_NAME=${COLLECTION_NAME:-policy_helper}
+  - CHUNK_SIZE=${CHUNK_SIZE:-700}
+  - CHUNK_OVERLAP=${CHUNK_OVERLAP:-80}
+  - DATA_DIR=${DATA_DIR:-/app/data}
 ```
 
 ---
 
-## 6. API error details are swallowed in the frontend
+## 5. No architecture diagram — rubric deduction
 
-**File:** `frontend/lib/api.ts` line 9
+**File:** none (missing)
 
 **Problem:**
-- When a request fails, the frontend throws a generic `Error('Ask failed')`
-- The server sends back a useful error message in the response body but it gets ignored
-- User sees nothing helpful in the UI
+- README constraints say: *"Provide small architecture diagram if you can (ASCII is fine)"*
+- Rubric gives 15 pts for reproducibility & docs — missing diagram costs points
+- Evaluators specifically look for this to understand the candidate's understanding of the system
+
+**Fix — add to README:**
+```
+Request
+  │
+  ▼
+Next.js Frontend (port 3000)
+  │  POST /api/ask
+  ▼
+FastAPI Backend (port 8000)
+  ├─ Ingest: load .md files → chunk → embed → upsert to Qdrant
+  └─ Ask:    embed query → search Qdrant (top-k) → LLM generate → mask PII → return
+       │                        │                        │
+       ▼                        ▼                        ▼
+  LocalEmbedder          Qdrant (port 6333)        OpenRouter / Ollama / Stub
+  (all-MiniLM-L6-v2)    (vector store)             (LLM provider)
+```
+
+---
+
+## 6. README is missing trade-offs and next steps — rubric deduction
+
+**File:** `README.md` or `AI_Policy_Helper_README.md`
+
+**Problem:**
+- Rubric deliverable #2: *"README describing setup, architecture, trade-offs, and what you'd ship next"*
+- Current README only has setup instructions, no trade-offs or next steps section
+- This directly costs rubric points (15 pts for reproducibility & docs)
+
+**Fix — add a section:**
+```markdown
+## Trade-offs
+- Used all-MiniLM-L6-v2 (384-dim) for speed over accuracy; larger models like bge-large improve recall
+- In-memory fallback means data is lost on restart — Qdrant is required for prod
+- Chunk size 700 tokens is a balance; too small loses context, too large dilutes relevance
+
+## What I'd ship next
+- Streaming responses (Server-Sent Events) for better UX
+- Re-ranking with a cross-encoder after initial retrieval
+- Persistent metrics store (Prometheus or simple SQLite)
+- Upload endpoint so users can add their own documents via the UI
+- Evaluation harness using the acceptance check queries as ground-truth
+```
+
+---
+
+## 7. Policy-specific retrieval tests will fail without fix #1
+
+**File:** `backend/app/tests/test_api.py` line 173–202
+
+**Problem:**
+- Three tests check that specific policy docs appear in citations:
+  - `test_ask_warranty_returns_relevant_source` — needs "Warranty" in titles
+  - `test_ask_returns_policy_returns_relevant_source` — needs "Return" or "Refund" in titles
+  - `test_ask_delivery_returns_relevant_source` — needs "Delivery" or "Shipping" in titles
+- All three will fail with the hash-based embedder because retrieval is random
+- `pytest -q` output shown to evaluators will have 3 failures
+
+**Fix:** Fix #1 (replace embedder) resolves this automatically. No separate code change needed here.
+
+---
+
+## 8. API error details are swallowed in the frontend
+
+**File:** `frontend/lib/api.ts` line 9, 15, 20
+
+**Problem:**
+- All three API functions throw a hardcoded generic error string (`'Ask failed'`, `'Ingest failed'`, `'Metrics failed'`)
+- Server returns a `{"detail": "..."}` body on 4xx/5xx but it gets ignored
+- Rubric gives 10 pts for UX & DX polish — unclear error messages cost points
 
 **Fix:**
 ```typescript
+async function handleResponse(r: Response, fallback: string) {
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ detail: fallback }));
+    throw new Error(err.detail || fallback);
+  }
+  return r.json();
+}
+
 export async function apiAsk(query: string, k: number = 4) {
   const r = await fetch(`${API_BASE}/api/ask`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, k })
   });
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({ detail: 'Ask failed' }));
-    throw new Error(err.detail || 'Ask failed');
-  }
-  return r.json();
+  return handleResponse(r, 'Ask failed');
+}
+
+export async function apiIngest() {
+  const r = await fetch(`${API_BASE}/api/ingest`, { method: 'POST' });
+  return handleResponse(r, 'Ingest failed');
+}
+
+export async function apiMetrics() {
+  const r = await fetch(`${API_BASE}/api/metrics`);
+  return handleResponse(r, 'Metrics failed');
 }
 ```
 
-Do the same for `apiIngest` and `apiMetrics`.
-
 ---
 
-## 7. Frontend container starts before the backend is actually ready
+## Priority Summary (against README rubric)
 
-**File:** `docker-compose.yml` line 34–35
-
-**Problem:**
-- `depends_on: backend` only waits for the container to start, not for FastAPI to finish booting
-- Frontend may get `Connection refused` on first load
-
-**Fix:**
-
-Add a healthcheck to the backend service:
-```yaml
-backend:
-  build: ./backend
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-    interval: 10s
-    timeout: 5s
-    retries: 5
-  ...
-
-frontend:
-  ...
-  depends_on:
-    backend:
-      condition: service_healthy
-```
-
----
-
-## 8. Metrics are lost on every container restart
-
-**File:** `backend/app/rag.py` — `Metrics` class
-
-**Problem:**
-- All latency data is stored in a Python list in memory
-- Every Docker restart wipes everything
-- Useless for any real monitoring
-
-**Fix — persist to file:**
-```python
-import json, pathlib
-
-class Metrics:
-    def __init__(self, path: str = "/app/data/metrics.json"):
-        self._path = pathlib.Path(path)
-        data = json.loads(self._path.read_text()) if self._path.exists() else {}
-        self.t_retrieval = data.get("t_retrieval", [])
-        self.t_generation = data.get("t_generation", [])
-
-    def _save(self):
-        self._path.write_text(json.dumps({
-            "t_retrieval": self.t_retrieval[-500:],
-            "t_generation": self.t_generation[-500:],
-        }))
-
-    def add_retrieval(self, ms: float):
-        self.t_retrieval.append(ms)
-        self._save()
-
-    def add_generation(self, ms: float):
-        self.t_generation.append(ms)
-        self._save()
-```
-
----
-
-## 9. StubLLM output is confusing for new users
-
-**File:** `backend/app/rag.py` line 109–119
-
-**Problem:**
-- Default provider is `stub` — a new user who clones this repo will get answers like `Answer (stub): Based on the following sources:`
-- No clear indication in the UI that this is demo mode, not an error
-
-**Fix:**
-- In `.env`, set `LLM_PROVIDER=openrouter` and add your API key
-- Or detect stub output in the frontend and show a warning banner:
-
-```tsx
-// in Chat.tsx after receiving answer
-const isStub = res.answer.startsWith('Answer (stub):');
-// show a "Demo Mode — no LLM configured" badge if isStub is true
-```
-
----
-
-## Priority Summary
-
-| # | Issue | Critical? |
-|---|-------|-----------|
-| 1 | Embedder is not semantic | Yes — RAG does not work |
-| 2 | CORS misconfigured | Yes — frontend is broken |
-| 3 | Qdrant URL hardcoded | Medium |
-| 4 | `recreate_collection` deprecated | Yes — crashes on deploy |
-| 5 | Raw filename as document title | Low |
-| 6 | Error details swallowed in frontend | Medium |
-| 7 | Frontend starts before backend is ready | Medium |
-| 8 | Metrics lost on restart | Low |
-| 9 | StubLLM output confusing | Low |
+| # | Issue | Rubric impact | Must fix? |
+|---|-------|--------------|-----------|
+| 1 | Embedder not semantic | Acceptance checks #3 #4 fail, 3 tests fail | Yes |
+| 2 | Stub LLM in demo | README requires real LLM | Yes |
+| 3 | PII in citation chunks not masked | PDPA requirement in project | Yes |
+| 4 | `LLM_MODEL` not in docker-compose env | Config won't apply via Docker | Yes |
+| 5 | No architecture diagram | Rubric docs 15pts | Yes |
+| 6 | README missing trade-offs/next steps | Rubric docs 15pts | Yes |
+| 7 | 3 policy tests fail | Rubric testing 10pts | Fixed by #1 |
+| 8 | Generic error messages in frontend | Rubric UX 10pts | Medium |
