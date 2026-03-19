@@ -133,25 +133,6 @@ environment:
 - Rubric gives 15 pts for reproducibility & docs — missing diagram costs points
 - Evaluators specifically look for this to understand the candidate's understanding of the system
 
-**Fix — add to README:**
-```
-Request
-  │
-  ▼
-Next.js Frontend (port 3000)
-  │  POST /api/ask
-  ▼
-FastAPI Backend (port 8000)
-  ├─ Ingest: load .md files → chunk → embed → upsert to Qdrant
-  └─ Ask:    embed query → search Qdrant (top-k) → LLM generate → mask PII → return
-       │                        │                        │
-       ▼                        ▼                        ▼
-  LocalEmbedder          Qdrant (port 6333)        OpenRouter / Ollama / Stub
-  (all-MiniLM-L6-v2)    (vector store)             (LLM provider)
-```
-
----
-
 ## 6. README is missing trade-offs and next steps — rubric deduction
 
 **File:** `README.md` or `AI_Policy_Helper_README.md`
@@ -232,18 +213,3 @@ export async function apiMetrics() {
   return handleResponse(r, 'Metrics failed');
 }
 ```
-
----
-
-## Priority Summary (against README rubric)
-
-| # | Issue | Rubric impact | Must fix? |
-|---|-------|--------------|-----------|
-| 1 | Embedder not semantic | Acceptance checks #3 #4 fail, 3 tests fail | Yes |
-| 2 | Stub LLM in demo | README requires real LLM | Yes |
-| 3 | PII in citation chunks not masked | PDPA requirement in project | Yes |
-| 4 | `LLM_MODEL` not in docker-compose env | Config won't apply via Docker | Yes |
-| 5 | No architecture diagram | Rubric docs 15pts | Yes |
-| 6 | README missing trade-offs/next steps | Rubric docs 15pts | Yes |
-| 7 | 3 policy tests fail | Rubric testing 10pts | Fixed by #1 |
-| 8 | Generic error messages in frontend | Rubric UX 10pts | Medium |
