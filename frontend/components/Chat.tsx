@@ -1,5 +1,6 @@
 'use client';
 import React from 'react';
+import ReactMarkdown from 'react-markdown';
 import { apiAsk } from '../lib/api';
 
 type Message = { role: 'user' | 'assistant', content: string, citations?: {title:string, section?:string}[], chunks?: {title:string, section?:string, text:string}[] };
@@ -33,7 +34,9 @@ export default function Chat() {
         {messages.map((m, i) => (
           <div key={i} style={{margin: '8px 0'}}>
             <div style={{fontSize:12, color:'#666'}}>{m.role === 'user' ? 'You' : 'Assistant'}</div>
-            <div>{m.content}</div>
+            <div style={{lineHeight:1.6, fontSize:14}}>
+              <ReactMarkdown components={{h1:({node,...p})=><strong style={{fontSize:14}} {...p}/>, h2:({node,...p})=><strong style={{fontSize:14}} {...p}/>, h3:({node,...p})=><strong style={{fontSize:13}} {...p}/>}}>{m.content}</ReactMarkdown>
+            </div>
             {m.citations && m.citations.length>0 && (
               <div style={{marginTop:6}}>
                 {m.citations.map((c, idx) => (
@@ -44,7 +47,7 @@ export default function Chat() {
                     {m.chunks?.[idx] && (
                       <div style={{background:'#f6f8fa', padding:8, borderRadius:8, marginTop:4, fontSize:12, maxWidth:480, whiteSpace:'pre-wrap', border:'1px solid #e5e7eb'}}>
                         <div style={{fontWeight:600, marginBottom:4}}>{m.chunks[idx].title}{m.chunks[idx].section ? ` — ${m.chunks[idx].section}` : ''}</div>
-                        {m.chunks[idx].text}
+                        <ReactMarkdown components={{h1:({node,...p})=><strong style={{fontSize:12}} {...p}/>, h2:({node,...p})=><strong style={{fontSize:12}} {...p}/>, h3:({node,...p})=><strong style={{fontSize:12}} {...p}/>}}>{m.chunks[idx].text}</ReactMarkdown>
                       </div>
                     )}
                   </details>
